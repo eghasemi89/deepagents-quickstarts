@@ -54,6 +54,8 @@ Then follow the instructions in the [deepagents-ui README](https://github.com/la
 
 This provides a user-friendly chat interface and visualization of files in state. 
 
+<img width="2039" height="1495" alt="Screenshot 2025-11-17 at 1 11 27 PM" src="https://github.com/user-attachments/assets/d559876b-4c90-46fb-8e70-c16c93793fa8" />
+
 ## 📚 Resources
 
 - **[Deep Research Course](https://academy.langchain.com/courses/deep-research-with-langgraph)** - Full course on deep research with LangGraph
