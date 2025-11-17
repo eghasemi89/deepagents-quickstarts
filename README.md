@@ -63,7 +63,7 @@ Every deepagent includes the following middleware by default (applied in order).
 
 ## Writing Custom Instructions
 
-When building a deepagent, you can provide a `system_prompt` parameter to `create_deep_agent()`. This custom prompt is **appended to** default instructions that are automatically injected by middleware. Understanding this layering is crucial for writing effective custom instructions. Read about the [default instructions in the deepagents README](https://github.com/langchain-ai/deepagents?tab=readme-ov-file#built-in-tools) below.
+When building your own custom deepagent, you can provide a `system_prompt` parameter to `create_deep_agent()`. This custom prompt is **appended to** default instructions that are automatically injected by middleware. Understanding this layering is crucial for writing effective custom instructions. Read about the [default instructions in the deepagents README](https://github.com/langchain-ai/deepagents?tab=readme-ov-file#built-in-tools) below. You can follow some general guidelines below, and see specific examples in the quickstart folders. 
 
 **Do:**
 - ✅ Define domain-specific workflows (e.g., research methodology, data analysis steps)
