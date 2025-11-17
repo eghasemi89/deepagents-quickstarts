@@ -37,7 +37,22 @@ Run local [LangGraph server](https://langchain-ai.github.io/langgraph/tutorials/
 uv run --extra langgraph langgraph dev
 ```
 
+LangGraph server will open a new browser window with the Studio interface, which you can submit your search query to: 
+
 <img width="2869" height="1512" alt="Screenshot 2025-11-17 at 11 42 59 AM" src="https://github.com/user-attachments/assets/03090057-c199-42fe-a0f7-769704c2124b" />
+
+You can also connect the LangGraph server to a [UI specifically designed for deepagents](https://github.com/langchain-ai/deep-agents-ui):
+
+```bash
+$ git clone https://github.com/langchain-ai/deepagents-ui.git
+$ cd deepagents-ui
+$ yarn install
+$ yarn dev
+```
+
+Then follow the instructions in the [deepagents-ui README](https://github.com/langchain-ai/deepagents-ui?tab=readme-ov-file#connecting-to-a-langgraph-server) to connect the UI to the running LangGraph server.
+
+This provides a user-friendly chat interface and visualization of files in state. 
 
 ## 📚 Resources
 
