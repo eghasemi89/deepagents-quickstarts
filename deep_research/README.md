@@ -25,16 +25,24 @@ export TAVILY_API_KEY=your_tavily_api_key_here        # Optional, for web search
 export LANGSMITH_API_KEY=your_langsmith_api_key_here    # [LangSmith API key](https://smith.langchain.com/settings) (free to sign up)
 ```
 
-Run Jupyter notebook:
+## Usage Options
+
+You can run this quickstart in two ways:
+
+### Option 1: Jupyter Notebook
+
+Run the interactive notebook to step through the research agent:
 
 ```bash
 uv run jupyter notebook research_agent.ipynb
 ```
 
-Run local [LangGraph server](https://langchain-ai.github.io/langgraph/tutorials/langgraph-platform/local-server/) and simply input your search query:
+### Option 2: LangGraph Server
+
+Run a local [LangGraph server](https://langchain-ai.github.io/langgraph/tutorials/langgraph-platform/local-server/) with a web interface:
 
 ```bash
-uv run langgraph dev
+langgraph dev
 ```
 
 LangGraph server will open a new browser window with the Studio interface, which you can submit your search query to: 
