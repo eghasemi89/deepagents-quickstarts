@@ -1,13 +1,24 @@
 {
-  "dependencies": ["."],
+  "dependencies": [
+    ".",
+    "langchain>=1.0.0",
+    "langchain-google-genai>=3.1.0",
+    "langchain-openai>=1.0.2",
+    "langchain-anthropic>=1.0.3",
+    "langchain-tavily>=0.2.13",
+    "deepagents>=0.2.6",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "tavily-python>=0.5.0",
+    "markdownify>=1.2.0",
+    "httpx>=0.28.1",
+    "fastapi>=0.100.0"
+  ],
   "graphs": {
     "research": "./agent.py:agent"
   },
   "env": ".env",
   "http": {
     "app": "./webapp_advanced.py:app"
-  },
-  "auth": {
-   "path": "./security/auth.py:auth"
   }
 }
