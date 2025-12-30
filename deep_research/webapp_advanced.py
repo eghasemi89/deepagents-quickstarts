@@ -11,11 +11,34 @@ The key insight: You can create parallel endpoints by:
 3. LangGraph will mount/integrate your app alongside its defaults
 """
 
-from fastapi import FastAPI, APIRouter, Depends
+from fastapi import FastAPI, APIRouter, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
+from starlette.authentication import BaseUser
 import os
 from datetime import datetime
+
+# Try to import get_auth_ctx for fallback user access
+try:
+    from langgraph_api.utils import get_auth_ctx
+    HAS_AUTH_CTX = True
+except ImportError:
+    HAS_AUTH_CTX = False
+
+# Import the auth function for manual authentication
+# We need to import the actual function from the auth instance
+try:
+    from security.auth import auth as auth_instance
+    # The @auth.authenticate decorator stores the function in _authenticate_handler
+    if hasattr(auth_instance, '_authenticate_handler') and auth_instance._authenticate_handler:
+        authenticate_fn = auth_instance._authenticate_handler
+        HAS_AUTH_FN = True
+    else:
+        HAS_AUTH_FN = False
+        authenticate_fn = None
+except (ImportError, AttributeError):
+    HAS_AUTH_FN = False
+    authenticate_fn = None
 
 # ============================================================================
 # Custom Router Pattern (Recommended for parallel routes)
@@ -30,6 +53,75 @@ custom_api_router = APIRouter(
 )
 
 
+# ============================================================================
+# Authentication Dependency
+# ============================================================================
+
+async def get_current_user(request: Request) -> BaseUser:
+    """Dependency to get the current authenticated user.
+    
+    This extracts the user from the request scope or auth context, which is set by LangGraph's
+    authentication middleware. If not found, it manually calls the authentication function
+    from security/auth.py to authenticate the user.
+    
+    Note: We access user via request.scope.get("user") instead of request.user
+    because LangGraph stores the authenticated user in the ASGI scope, and
+    AuthenticationMiddleware may not be installed for custom routes.
+    We also check the auth context as a fallback, similar to LangGraph's internal routes.
+    As a last resort, we manually call the authentication function.
+    
+    Raises:
+        HTTPException: 401 if user is not authenticated
+    """
+    # First try to get user from scope (set by authentication middleware)
+    user = request.scope.get("user")
+    
+    # Fallback to auth context if available (used by LangGraph internally)
+    if not user and HAS_AUTH_CTX:
+        ctx = get_auth_ctx()
+        if ctx and ctx.user:
+            user = ctx.user
+    
+    # If user still not found, manually authenticate using the Supabase auth function
+    if not user and HAS_AUTH_FN and authenticate_fn:
+        # Extract authorization header (case-insensitive)
+        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+        
+        try:
+            # Call the Supabase auth function directly
+            # The function in security/auth.py validates the Bearer token with Supabase
+            # It expects authorization: str | None and returns a dict with identity, email, etc.
+            user_dict = await authenticate_fn(auth_header)
+            
+            # Convert dict to BaseUser-like object using LangGraph's normalize_user
+            from langgraph_api.auth.custom import normalize_user
+            user = normalize_user(user_dict)
+        except HTTPException:
+            # Re-raise FastAPI HTTPException as-is
+            raise
+        except Exception as e:
+            # Handle Auth.exceptions.HTTPException from the auth function
+            # The auth function raises Auth.exceptions.HTTPException on validation failures
+            from langgraph_sdk import Auth
+            if isinstance(e, Auth.exceptions.HTTPException):
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=e.detail
+                )
+            # For other exceptions, raise 401
+            raise HTTPException(
+                status_code=401,
+                detail=f"Authentication failed: {str(e)}"
+            )
+    
+    if not user or not hasattr(user, "identity"):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required"
+        )
+    return user
+
+
 @custom_api_router.get("/health")
 async def health_check():
     """Health check endpoint - works in parallel with LangGraph defaults."""
@@ -41,13 +133,27 @@ async def health_check():
 
 
 @custom_api_router.get("/stats")
-async def get_stats():
-    """Get deployment statistics."""
+async def get_stats(user: BaseUser = Depends(get_current_user)):
+    """Get deployment statistics with user information.
+    
+    This endpoint requires authentication via Bearer token in the Authorization header.
+    Returns deployment stats along with the authenticated user's information.
+    """
+    # Extract user information - email is available from the auth handler
+    user_email = getattr(user, "email", None)
+    user_identity = user.identity
+    user_display_name = getattr(user, "display_name", user_identity)
+    
     return {
         "agent_name": "research",
         "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
         "has_tavily": bool(os.getenv("TAVILY_API_KEY")),
         "environment": os.getenv("ENVIRONMENT", "development"),
+        "user": {
+            "identity": user_identity,
+            "email": user_email,
+            "display_name": user_display_name,
+        },
     }
 
 
