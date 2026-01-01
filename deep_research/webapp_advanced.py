@@ -12,7 +12,6 @@ The key insight: You can create parallel endpoints by:
 """
 
 from fastapi import FastAPI, APIRouter, Depends, Request, HTTPException
-from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 from starlette.authentication import BaseUser
 import os
@@ -60,20 +59,20 @@ custom_api_router = APIRouter(
 async def get_current_user(request: Request) -> BaseUser:
     """Dependency to get the current authenticated user.
     
-    This extracts the user from the request scope or auth context, which is set by LangGraph's
-    authentication middleware. If not found, it manually calls the authentication function
-    from security/auth.py to authenticate the user.
+    With `enable_custom_route_auth: true` in langgraph.json, LangGraph's authentication
+    middleware is automatically applied to custom routes. The authenticated user is stored
+    in request.scope["user"] by LangGraph's authentication middleware.
     
-    Note: We access user via request.scope.get("user") instead of request.user
-    because LangGraph stores the authenticated user in the ASGI scope, and
-    AuthenticationMiddleware may not be installed for custom routes.
-    We also check the auth context as a fallback, similar to LangGraph's internal routes.
-    As a last resort, we manually call the authentication function.
+    This dependency provides a simple way to access the authenticated user in route handlers.
+    If the middleware didn't set the user, it falls back to manual authentication.
     
     Raises:
         HTTPException: 401 if user is not authenticated
     """
-    # First try to get user from scope (set by authentication middleware)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Try to get user from scope (set by middleware if enable_custom_route_auth works)
     user = request.scope.get("user")
     
     # Fallback to auth context if available (used by LangGraph internally)
@@ -82,37 +81,38 @@ async def get_current_user(request: Request) -> BaseUser:
         if ctx and ctx.user:
             user = ctx.user
     
-    # If user still not found, manually authenticate using the Supabase auth function
+    # If user still not found, manually authenticate using the auth function
+    # This is the reliable fallback that ensures authentication works
     if not user and HAS_AUTH_FN and authenticate_fn:
-        # Extract authorization header (case-insensitive)
+        # Extract authorization header
         auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
         
-        try:
-            # Call the Supabase auth function directly
-            # The function in security/auth.py validates the Bearer token with Supabase
-            # It expects authorization: str | None and returns a dict with identity, email, etc.
-            user_dict = await authenticate_fn(auth_header)
-            
-            # Convert dict to BaseUser-like object using LangGraph's normalize_user
-            from langgraph_api.auth.custom import normalize_user
-            user = normalize_user(user_dict)
-        except HTTPException:
-            # Re-raise FastAPI HTTPException as-is
-            raise
-        except Exception as e:
-            # Handle Auth.exceptions.HTTPException from the auth function
-            # The auth function raises Auth.exceptions.HTTPException on validation failures
-            from langgraph_sdk import Auth
-            if isinstance(e, Auth.exceptions.HTTPException):
+        if auth_header:
+            try:
+                # Call the Supabase auth function directly
+                # This is the reliable authentication method for custom routes
+                user_dict = await authenticate_fn(auth_header)
+                
+                # Convert dict to BaseUser-like object using LangGraph's normalize_user
+                from langgraph_api.auth.custom import normalize_user
+                user = normalize_user(user_dict)
+            except HTTPException:
+                # Re-raise FastAPI HTTPException as-is
+                raise
+            except Exception as e:
+                logger.error(f"Manual authentication failed: {str(e)}", exc_info=True)
+                # Handle Auth.exceptions.HTTPException from the auth function
+                from langgraph_sdk import Auth
+                if isinstance(e, Auth.exceptions.HTTPException):
+                    raise HTTPException(
+                        status_code=e.status_code,
+                        detail=e.detail
+                    )
+                # For other exceptions, raise 401
                 raise HTTPException(
-                    status_code=e.status_code,
-                    detail=e.detail
+                    status_code=401,
+                    detail=f"Authentication failed: {str(e)}"
                 )
-            # For other exceptions, raise 401
-            raise HTTPException(
-                status_code=401,
-                detail=f"Authentication failed: {str(e)}"
-            )
     
     if not user or not hasattr(user, "identity"):
         raise HTTPException(
@@ -154,6 +154,44 @@ async def get_stats(user: BaseUser = Depends(get_current_user)):
             "email": user_email,
             "display_name": user_display_name,
         },
+    }
+
+
+@custom_api_router.get("/user")
+async def get_user_info(user: BaseUser = Depends(get_current_user)):
+    """Get authenticated user information.
+    
+    This endpoint demonstrates using LangGraph's built-in authentication middleware
+    (enabled via enable_custom_route_auth in langgraph.json). The user is automatically
+    authenticated by LangGraph's middleware before this handler is called.
+    
+    Returns:
+        User information including identity, email, and other available attributes.
+    """
+    # Extract all available user information
+    user_identity = user.identity
+    user_email = getattr(user, "email", None)
+    user_display_name = getattr(user, "display_name", None)
+    user_is_authenticated = getattr(user, "is_authenticated", True)
+    
+    # Get any additional attributes that might be available
+    user_info = {
+        "identity": user_identity,
+        "email": user_email,
+        "display_name": user_display_name,
+        "is_authenticated": user_is_authenticated,
+    }
+    
+    # Include any other attributes that might be present
+    if hasattr(user, "__dict__"):
+        for key, value in user.__dict__.items():
+            if key not in user_info and not key.startswith("_"):
+                user_info[key] = value
+    
+    return {
+        "user": user_info,
+        "message": "Successfully authenticated via LangGraph middleware",
+        "timestamp": datetime.now().isoformat(),
     }
 
 
