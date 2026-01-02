@@ -111,10 +111,10 @@ async def on_threads_create(
     ctx: Auth.types.AuthContext,
     value: dict,
 ) -> dict:
-    """Authorize thread creation - sets owner in metadata.
+    """Authorize thread creation - sets owner and organization_id in metadata.
     
     This handler is called by LangGraph when a user creates a new thread.
-    It sets the owner field in the thread's metadata so we can filter by it later.
+    It sets trusted metadata fields from the authenticated user context.
     
     Args:
         ctx: Authentication context containing user info (ctx.user.identity = user_id)
@@ -126,11 +126,18 @@ async def on_threads_create(
     user_id = ctx.user.identity
     logger.info(f"🔒 Thread CREATE authorization for user: {user_id}")
     
-    # Set owner in metadata - this gets saved with the thread in the database
-    # This is the key: we're storing the owner so we can filter by it later
+    # Set trusted metadata from authenticated context (not from frontend)
+    # This ensures security - frontend cannot spoof these values
     metadata = value.setdefault("metadata", {})
     metadata["owner"] = user_id
+    
+    # Set organization_id from backend (for now, set to "na" as placeholder)
+    # TODO: Extract organization_id from user context if available
+    # For example: metadata["organization_id"] = ctx.user.organization_id
+    metadata["organization_id"] = "na"
+    
     logger.debug(f"   → Set metadata['owner'] = {user_id}")
+    logger.debug(f"   → Set metadata['organization_id'] = 'na'")
     
     # Return filter (though for create, the metadata is what matters)
     return {"owner": user_id}
