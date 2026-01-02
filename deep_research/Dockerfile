@@ -53,6 +53,7 @@ RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir \
     markdownify>=1.2.0 \
     httpx>=0.28.1 \
     fastapi>=0.100.0 \
+    python-multipart>=0.0.6 \
     langgraph-sdk>=0.2.0
 
 # Install local package in editable mode
