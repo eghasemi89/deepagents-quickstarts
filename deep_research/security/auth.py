@@ -28,8 +28,26 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
 # The `authenticate` decorator tells LangGraph to call this function as middleware
 # for every request. This will determine whether the request is allowed or not
 @auth.authenticate
-async def get_current_user(authorization: str | None) -> Auth.types.MinimalUserDict:
-    """Validate JWT tokens from Supabase and extract user information."""
+async def get_current_user(
+    authorization: str | None,
+    method: str | None = None,
+) -> Auth.types.MinimalUserDict:
+    """Validate JWT tokens from Supabase and extract user information.
+    
+    Note: OPTIONS requests (CORS preflight) bypass authentication to allow
+    browsers to check CORS permissions before making the actual request.
+    """
+    # Skip authentication for OPTIONS requests (CORS preflight)
+    # Browsers send OPTIONS requests without Authorization headers to check CORS
+    if method == "OPTIONS":
+        logger.debug("🔓 Skipping authentication for OPTIONS preflight request")
+        # Return a minimal user dict for OPTIONS requests
+        # The actual request will be authenticated separately
+        return {
+            "identity": "preflight",
+            "is_authenticated": False,
+        }
+    
     logger.info("🔐 Authentication function invoked - get_current_user called")
     logger.debug(f"Authorization header present: {authorization is not None}")
     
@@ -205,16 +223,46 @@ async def on_threads_search(
     logger.debug(f"   → LangGraph will query: SELECT * FROM threads WHERE metadata->>'owner' = '{user_id}'")
     return filter_dict
 
+@auth.on.threads.delete
+async def on_threads_delete(
+    ctx: Auth.types.AuthContext,
+    value: dict,
+) -> dict:
+    """Authorize thread deletion - ensures users can only delete their own threads.
+    
+    This handler is called by LangGraph when a user tries to delete a thread.
+    LangGraph uses the returned filter to check if the thread's metadata.owner matches.
+    
+    Args:
+        ctx: Authentication context containing user info
+        value: The delete request payload (contains thread_id)
+    
+    Returns:
+        A filter dictionary: {"owner": user_id}
+        LangGraph internally checks: thread.metadata["owner"] == user_id
+        If no match, the request is denied (403) or returns 404
+    """
+    user_id = ctx.user.identity
+    thread_id = value.get("thread_id", "unknown")
+    logger.info(f"🔒 Thread DELETE authorization for user: {user_id}, thread: {thread_id}")
+    
+    # Return filter - LangGraph will check if thread.metadata["owner"] == user_id
+    # This happens INSIDE LangGraph's code, not in our handler
+    filter_dict = {"owner": user_id}
+    logger.debug(f"   → Returning filter: {filter_dict}")
+    logger.debug(f"   → LangGraph will check: thread.metadata['owner'] == '{user_id}'")
+    return filter_dict
+
 
 @auth.on.threads
 async def on_threads(
     ctx: Auth.types.AuthContext,
     value: dict,
 ) -> dict:
-    """Fallback handler for other thread operations (update, delete).
+    """Fallback handler for other thread operations (update).
     
     This is a catch-all for thread operations that don't have specific handlers.
-    The more specific handlers (create, read, search) take precedence.
+    The more specific handlers (create, read, search, delete) take precedence.
     
     Args:
         ctx: Authentication context containing user info
@@ -226,7 +274,7 @@ async def on_threads(
     user_id = ctx.user.identity
     logger.debug(f"🔒 Thread operation (fallback) for user: {user_id} on path: {ctx.path}")
     
-    # For update/delete, we want to ensure users can only modify their own threads
+    # For update, we want to ensure users can only modify their own threads
     metadata = value.setdefault("metadata", {})
     if "owner" not in metadata:
         metadata["owner"] = user_id
