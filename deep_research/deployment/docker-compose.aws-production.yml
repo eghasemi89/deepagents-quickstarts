@@ -1,37 +1,26 @@
-# Docker Compose file for testing AWS deployment locally
-# This mimics the AWS ECS setup with separate services
-# Uses POSTGRES_URI_CUSTOM (for AWS/Supabase) instead of POSTGRES_URI
+# Docker Compose file for AWS production deployment
+# This version uses external ElastiCache Redis (no local Redis container)
+# Use this when you have ElastiCache set up in AWS
 
 # version: '3.8'  # Version is obsolete in newer docker-compose
 
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   langgraph-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Image will be set by CI/CD workflow
+    # For local testing, uncomment build section:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     image: deep-research-api:latest
     ports:
       - "8123:8000"
     stdin_open: true
     tty: true
     environment:
-      # Database - required (uses POSTGRES_URI_CUSTOM for AWS/Supabase)
-      - POSTGRES_URI=${POSTGRES_URI_CUSTOM}
-      # Redis - required
-      - REDIS_URI=redis://redis:6379
+      # Database - required
+      - POSTGRES_URI=${POSTGRES_URI}
+      # Redis - required (uses ElastiCache endpoint from environment)
+      - REDIS_URI=${REDIS_URI}
       # API Keys - required
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -51,9 +40,6 @@ services:
       # Optional: Authentication credentials (if using auth.py)
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
-    depends_on:
-      redis:
-        condition: service_healthy
     env_file:
       - .env
     healthcheck:
@@ -66,7 +52,4 @@ services:
     restart: unless-stopped
     # Keep container running - don't exit on command completion
     command: []
-
-volumes:
-  redis-data:
 
