@@ -289,13 +289,14 @@ async def make_graph(config: dict = None):
     for subagent_name in selected_subagents_names:
         if subagent_name in AVAILABLE_SUBAGENTS:
             subagent_config = AVAILABLE_SUBAGENTS[subagent_name]
-            # Create subagent with configured model and tools
+            # Create subagent with configured tools (no explicit model - uses main agent model by default)
+            # This matches the static agent behavior
             subagent = {
                 "name": subagent_config["name"],
                 "description": subagent_config["description"],
                 "system_prompt": subagent_config["system_prompt_template"].format(date=current_date),
                 "tools": subagent_tools,
-                "model": subagent_model,  # Optional: subagent can have its own model
+                # Don't explicitly set model - let it use main agent model by default (matches static agent)
             }
             active_subagents.append(subagent)
             print(f"✅ Included subagent: {subagent_name}")
@@ -320,28 +321,24 @@ async def make_graph(config: dict = None):
     return agent
 
 
-# Note: The static agent variable is NOT needed when using make_graph()
-# langgraph.json now references "./agent.py:make_graph" which creates graphs dynamically
-# per-run with the configuration from config.configurable
-#
-# If you need to switch back to a static agent (not recommended for dynamic config),
-# change langgraph.json to: "research": "./agent.py:agent"
-# and uncomment the code below to create a static agent variable.
 
-# For backward compatibility only (not used when langgraph.json uses make_graph):
-# Uncomment below if you need a static agent variable
-# _default_model = get_model_from_name("openai:gpt-4o")
-# _default_tools = list(AVAILABLE_TOOLS.values())
-# _default_research_sub_agent = {
-#     "name": "research-agent",
-#     "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-#     "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-#     "tools": _default_tools,
-# }
-# agent = create_deep_agent(
-#     model=_default_model,
-#     tools=_default_tools,
-#     system_prompt=INSTRUCTIONS,
-#     subagents=[_default_research_sub_agent],
-#     context_schema=Context,
-# )
+'''
+# Static agent for testing (original implementation)
+# This is used when langgraph.json points to "./agent.py:agent"
+# For dynamic configuration, use make_graph() instead
+_default_model = get_model_from_name("openai:gpt-4o")
+_default_tools = list(AVAILABLE_TOOLS.values())
+_default_research_sub_agent = {
+    "name": "research-agent",
+    "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+    "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
+    "tools": _default_tools,
+}
+agent = create_deep_agent(
+    model=_default_model,
+    tools=_default_tools,
+    system_prompt=INSTRUCTIONS,
+    subagents=[_default_research_sub_agent],
+    context_schema=Context,
+)
+'''
