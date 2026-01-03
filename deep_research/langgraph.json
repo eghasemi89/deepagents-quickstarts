@@ -17,7 +17,7 @@
     "langgraph-sdk>=0.2.0"
   ],
   "graphs": {
-    "research": "./agent.py:agent",
+    "research": "./agent.py:make_graph",
     "chat": "./chat_agent.py:chat_agent"
   },
   "env": ".env",
