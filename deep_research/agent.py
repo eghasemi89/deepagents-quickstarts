@@ -38,9 +38,18 @@ class Context:
     model_name: str = "openai:gpt-4o"
     selected_tools: list[str] = None  # None means use all available tools
     
+    # Subagent configuration
+    selected_subagents: list[str] = None  # List of subagent names to include. None means use all available
+    subagent_model_name: str = None  # None means use main agent model
+    subagent_selected_tools: list[str] = None  # None means use main agent tools
+    
     def __post_init__(self):
         if self.selected_tools is None:
             self.selected_tools = ["tavily_search", "think_tool"]
+        if self.selected_subagents is None:
+            self.selected_subagents = ["research-agent"]  # Default: include research-agent
+        if self.subagent_selected_tools is None:
+            self.subagent_selected_tools = ["tavily_search", "think_tool"]
 
 # Limits
 max_concurrent_research_units = 3
@@ -65,6 +74,22 @@ INSTRUCTIONS = (
 AVAILABLE_TOOLS = {
     "tavily_search": tavily_search,
     "think_tool": think_tool,
+}
+
+# Available subagents configuration
+# Each subagent can be enabled/disabled and configured separately
+AVAILABLE_SUBAGENTS = {
+    "research-agent": {
+        "name": "research-agent",
+        "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+        "system_prompt_template": RESEARCHER_INSTRUCTIONS,  # Will be formatted with date
+    },
+    # You can add more subagents here in the future
+    # "analysis-agent": {
+    #     "name": "analysis-agent",
+    #     "description": "Specialized agent for data analysis tasks.",
+    #     "system_prompt_template": "You are an expert data analyst...",
+    # },
 }
 
 # Model Gemini 3 
@@ -190,7 +215,7 @@ async def make_graph(config: dict = None):
     if config is not None and isinstance(config, dict):
         configurable = config.get("configurable", {})
         
-        # Extract our custom configuration values
+        # Extract main agent configuration
         model_name = configurable.get("model_name", "openai:gpt-4o")
         
         # Check if selected_tools was explicitly provided (even if empty)
@@ -202,19 +227,45 @@ async def make_graph(config: dict = None):
             selected_tools_names = ["tavily_search", "think_tool"]
             tools_explicitly_provided = False
         
+        # Extract subagent selection
+        if "selected_subagents" in configurable:
+            selected_subagents_names = configurable.get("selected_subagents", [])
+            # Empty array means explicitly no subagents
+            subagents_explicitly_provided = True
+        else:
+            # Not provided - use default (all available)
+            selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
+            subagents_explicitly_provided = False
+        
+        # Extract subagent configuration
+        subagent_model_name = configurable.get("subagent_model_name", None)  # None = use main model
+        if "subagent_selected_tools" in configurable:
+            subagent_tools_names = configurable.get("subagent_selected_tools", [])
+            subagent_tools_explicitly_provided = True
+        else:
+            # Not provided - use main agent tools
+            subagent_tools_names = selected_tools_names.copy()
+            subagent_tools_explicitly_provided = False
+        
         # Only log if custom config is provided (not defaults)
-        if "model_name" in configurable or tools_explicitly_provided:
-            print(f"🔧 make_graph() - Using config: model={model_name}, tools={selected_tools_names}")
+        if "model_name" in configurable or tools_explicitly_provided or "selected_subagents" in configurable or "subagent_model_name" in configurable or subagent_tools_explicitly_provided:
+            subagent_info = f"subagents={selected_subagents_names}, subagent_model={subagent_model_name or 'main'}, subagent_tools={subagent_tools_names}"
+            print(f"🔧 make_graph() - Using config: model={model_name}, tools={selected_tools_names}, {subagent_info}")
     else:
         # Default configuration when config is not available
         model_name = "openai:gpt-4o"
         selected_tools_names = ["tavily_search", "think_tool"]
         tools_explicitly_provided = False
+        selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
+        subagents_explicitly_provided = False
+        subagent_model_name = None
+        subagent_tools_names = selected_tools_names.copy()
+        subagent_tools_explicitly_provided = False
     
-    # Initialize model
+    # Initialize main agent model
     model = get_model_from_name(model_name)
     
-    # Select tools based on configuration
+    # Select main agent tools based on configuration
     selected_tools = []
     for tool_name in selected_tools_names:
         if tool_name in AVAILABLE_TOOLS:
@@ -234,13 +285,55 @@ async def make_graph(config: dict = None):
             print("ℹ️  Using all available tools (default).")
             selected_tools = list(AVAILABLE_TOOLS.values())
     
-    # Create research sub-agent with selected tools
-    research_sub_agent = {
-        "name": "research-agent",
-        "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-        "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-        "tools": selected_tools,
-    }
+    # Initialize subagent model (use main model if not specified)
+    subagent_model = model  # Default to main agent model
+    if subagent_model_name:
+        subagent_model = get_model_from_name(subagent_model_name)
+        print(f"🔧 Subagent using separate model: {subagent_model_name}")
+    else:
+        print(f"🔧 Subagent using main agent model: {model_name}")
+    
+    # Select subagent tools based on configuration
+    subagent_tools = []
+    for tool_name in subagent_tools_names:
+        if tool_name in AVAILABLE_TOOLS:
+            subagent_tools.append(AVAILABLE_TOOLS[tool_name])
+        else:
+            print(f"⚠️  Warning: Subagent tool '{tool_name}' not found. Available: {list(AVAILABLE_TOOLS.keys())}")
+    
+    # If no valid subagent tools selected:
+    # - If user explicitly provided empty list: use no tools (respect user choice)
+    # - If not provided (default): use main agent tools
+    if not subagent_tools:
+        if subagent_tools_explicitly_provided and subagent_tools_names == []:
+            # User explicitly deselected all tools - respect their choice
+            print("ℹ️  No subagent tools selected by user. Subagent running without tools.")
+        else:
+            # Default case or invalid tools: use main agent tools
+            print("ℹ️  Subagent using main agent tools (default).")
+            subagent_tools = selected_tools.copy()
+    
+    # Build list of subagents based on selection
+    active_subagents = []
+    for subagent_name in selected_subagents_names:
+        if subagent_name in AVAILABLE_SUBAGENTS:
+            subagent_config = AVAILABLE_SUBAGENTS[subagent_name]
+            # Create subagent with configured model and tools
+            subagent = {
+                "name": subagent_config["name"],
+                "description": subagent_config["description"],
+                "system_prompt": subagent_config["system_prompt_template"].format(date=current_date),
+                "tools": subagent_tools,
+                "model": subagent_model,  # Optional: subagent can have its own model
+            }
+            active_subagents.append(subagent)
+            print(f"✅ Included subagent: {subagent_name}")
+        else:
+            print(f"⚠️  Warning: Subagent '{subagent_name}' not found. Available: {list(AVAILABLE_SUBAGENTS.keys())}")
+    
+    # If no subagents selected and explicitly provided, warn but continue
+    if not active_subagents and subagents_explicitly_provided:
+        print("⚠️  Warning: No subagents selected. Agent will run without subagents.")
     
     # Create the agent without a checkpointer
     # The LangGraph server will handle persistence automatically using POSTGRES_URI
@@ -248,7 +341,7 @@ async def make_graph(config: dict = None):
         model=model,
         tools=selected_tools,
         system_prompt=INSTRUCTIONS,
-        subagents=[research_sub_agent],
+        subagents=active_subagents if active_subagents else None,  # None = no subagents
         context_schema=Context,
         # Don't pass checkpointer - LangGraph server handles it via POSTGRES_URI
     )
