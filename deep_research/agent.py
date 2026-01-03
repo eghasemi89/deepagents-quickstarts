@@ -38,18 +38,15 @@ class Context:
     model_name: str = "openai:gpt-4o"
     selected_tools: list[str] = None  # None means use all available tools
     
-    # Subagent configuration
+    # Subagent configuration: Only selection is exposed to frontend
+    # Model and tools are handled by backend defaults (uses main agent model and tools)
     selected_subagents: list[str] = None  # List of subagent names to include. None means use all available
-    subagent_model_name: str = None  # None means use main agent model
-    subagent_selected_tools: list[str] = None  # None means use main agent tools
     
     def __post_init__(self):
         if self.selected_tools is None:
             self.selected_tools = ["tavily_search", "think_tool"]
-        if self.selected_subagents is None:
-            self.selected_subagents = ["research-agent"]  # Default: include research-agent
-        if self.subagent_selected_tools is None:
-            self.subagent_selected_tools = ["tavily_search", "think_tool"]
+        # Note: selected_subagents default is set in make_graph() to use all AVAILABLE_SUBAGENTS
+        # This allows the default to be dynamic based on what subagents are available
 
 # Limits
 max_concurrent_research_units = 3
@@ -237,19 +234,14 @@ async def make_graph(config: dict = None):
             selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
             subagents_explicitly_provided = False
         
-        # Extract subagent configuration
-        subagent_model_name = configurable.get("subagent_model_name", None)  # None = use main model
-        if "subagent_selected_tools" in configurable:
-            subagent_tools_names = configurable.get("subagent_selected_tools", [])
-            subagent_tools_explicitly_provided = True
-        else:
-            # Not provided - use main agent tools
-            subagent_tools_names = selected_tools_names.copy()
-            subagent_tools_explicitly_provided = False
+        # Subagent configuration: Use backend defaults (main agent model and tools)
+        # Frontend only controls which subagents are selected, not their configuration
+        subagent_model_name = None  # Always use main agent model (backend default)
+        subagent_tools_names = selected_tools_names.copy()  # Always use main agent tools (backend default)
         
         # Only log if custom config is provided (not defaults)
-        if "model_name" in configurable or tools_explicitly_provided or "selected_subagents" in configurable or "subagent_model_name" in configurable or subagent_tools_explicitly_provided:
-            subagent_info = f"subagents={selected_subagents_names}, subagent_model={subagent_model_name or 'main'}, subagent_tools={subagent_tools_names}"
+        if "model_name" in configurable or tools_explicitly_provided or "selected_subagents" in configurable:
+            subagent_info = f"subagents={selected_subagents_names}, subagent_model=main (default), subagent_tools=main (default)"
             print(f"🔧 make_graph() - Using config: model={model_name}, tools={selected_tools_names}, {subagent_info}")
     else:
         # Default configuration when config is not available
@@ -258,9 +250,9 @@ async def make_graph(config: dict = None):
         tools_explicitly_provided = False
         selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
         subagents_explicitly_provided = False
+        # Subagent defaults: use main model and main tools
         subagent_model_name = None
         subagent_tools_names = selected_tools_names.copy()
-        subagent_tools_explicitly_provided = False
     
     # Initialize main agent model
     model = get_model_from_name(model_name)
@@ -285,33 +277,12 @@ async def make_graph(config: dict = None):
             print("ℹ️  Using all available tools (default).")
             selected_tools = list(AVAILABLE_TOOLS.values())
     
-    # Initialize subagent model (use main model if not specified)
-    subagent_model = model  # Default to main agent model
-    if subagent_model_name:
-        subagent_model = get_model_from_name(subagent_model_name)
-        print(f"🔧 Subagent using separate model: {subagent_model_name}")
-    else:
-        print(f"🔧 Subagent using main agent model: {model_name}")
-    
-    # Select subagent tools based on configuration
-    subagent_tools = []
-    for tool_name in subagent_tools_names:
-        if tool_name in AVAILABLE_TOOLS:
-            subagent_tools.append(AVAILABLE_TOOLS[tool_name])
-        else:
-            print(f"⚠️  Warning: Subagent tool '{tool_name}' not found. Available: {list(AVAILABLE_TOOLS.keys())}")
-    
-    # If no valid subagent tools selected:
-    # - If user explicitly provided empty list: use no tools (respect user choice)
-    # - If not provided (default): use main agent tools
-    if not subagent_tools:
-        if subagent_tools_explicitly_provided and subagent_tools_names == []:
-            # User explicitly deselected all tools - respect their choice
-            print("ℹ️  No subagent tools selected by user. Subagent running without tools.")
-        else:
-            # Default case or invalid tools: use main agent tools
-            print("ℹ️  Subagent using main agent tools (default).")
-            subagent_tools = selected_tools.copy()
+    # Subagent configuration: Always use main agent model and tools (backend defaults)
+    # Frontend only controls which subagents are selected, not their configuration
+    subagent_model = model  # Always use main agent model
+    subagent_tools = selected_tools.copy()  # Always use main agent tools
+    print(f"🔧 Subagent using main agent model: {model_name}")
+    print(f"🔧 Subagent using main agent tools: {[t.name if hasattr(t, 'name') else str(t) for t in selected_tools]}")
     
     # Build list of subagents based on selection
     active_subagents = []
