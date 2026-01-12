@@ -77,7 +77,7 @@ jobs:
         run: |
           set -e
 
-          # Setup SSH (robust key write: handles \n, CRLF, and accidental quotes)
+          # Setup SSH (robust: handles \n, CRLF, and accidental quotes)
           mkdir -p ~/.ssh
           python3 - <<'PY'
           import os, pathlib
@@ -104,14 +104,22 @@ jobs:
           scp -i ~/.ssh/deploy_key .env.deploy \
             "$EC2_USER@$EC2_HOST:/home/$EC2_USER/.env"
 
-          # Login to ECR on EC2 and deploy
+          # Deploy on EC2
           ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" << EOF
             set -e
 
             aws ecr get-login-password --region ${AWS_REGION} | \
               docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
-            export APP_IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+            APP_IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+            # Ensure APP_IMAGE is available to docker-compose (compose reads .env)
+            # Replace existing APP_IMAGE line if present; otherwise append.
+            if grep -q '^APP_IMAGE=' .env; then
+              sed -i "s|^APP_IMAGE=.*|APP_IMAGE=\$APP_IMAGE|" .env
+            else
+              echo "APP_IMAGE=\$APP_IMAGE" >> .env
+            fi
 
             echo "=== Rendered compose images (redis/langgraph-api) ==="
             docker-compose -f docker-compose.aws.yml --env-file .env config | \
@@ -150,8 +158,6 @@ jobs:
           PY
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
-
-          # Fail fast if key is invalid
           ssh-keygen -lf ~/.ssh/deploy_key
 
           sleep 30
