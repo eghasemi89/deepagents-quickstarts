@@ -126,7 +126,7 @@ After installation, configure it with your AWS credentials:
    - Click your username (top right) → **"Security credentials"**
    - Scroll to **"Access keys"** section
    - Click **"Create access key"**
-   - Choose **"Command Line Interface (CLI)"**
+   - ~Choose **"Command Line Interface (CLI)"**~
    - Click **"Next"** → **"Create access key"**
    - **⚠️ IMPORTANT:** Copy both the Access Key ID and Secret Access Key immediately (you won't see the secret again!)
 
@@ -409,6 +409,13 @@ chown ec2-user:ec2-user /home/ec2-user/deep-research
 
 **For this guide, we'll show Option A (ElastiCache).** If you prefer Option B, skip this step and use `deep_research/deployment/docker-compose.aws.yml` which includes a Redis container.
 
+**📝 Note:** In the ElastiCache console, you'll see three cache types:
+- **Valkey caches** - Newer fork of Redis (recommended for new deployments)
+- **Redis OSS caches** - Original Redis open-source (also works fine)
+- **Memcached caches** - Different caching engine (not compatible with Redis)
+
+For this guide, we'll use **Redis OSS caches**, but **Valkey caches** will work the same way.
+
 #### Step-by-Step: Create ElastiCache Redis
 
 1. **Go to ElastiCache Console:**
@@ -442,53 +449,68 @@ chown ec2-user:ec2-user /home/ec2-user/deep-research
    - Click **"Create security group"**
    - **Note the Security Group ID** (e.g., `sg-0123456789abcdef0`)
 
-4. **Create Redis Cluster:**
+4. **Create Redis Cache:**
    - Go back to **ElastiCache Console**
-   - In the left sidebar, click **"Redis clusters"**
-   - Click **"Create Redis cluster"** button
+   - In the left sidebar, under **"Resources"**, click **"Redis OSS caches"** (or **"Valkey caches"** if you prefer Valkey)
+   - Click **"Create Redis cache"** button (or **"Create Valkey cache"** if using Valkey)
+   - **Note:** Valkey is a newer fork of Redis with similar compatibility. Both work for this use case.
 
-5. **Configure Redis Cluster:**
+5. **Configure Redis Cache:**
    
-   **a. Cluster Settings:**
-   - **Cluster mode:** Select **"Disabled"** (simpler, single node)
+   **a. Engine Selection:**
+   - **Engine:** Select **"Redis OSS"** (or **"Valkey - recommended"** for 20-33% cost savings)
+   - Both work identically for this use case
+   
+   **b. Deployment Option:**
+   - **Deployment option:** Select **"Node-based cluster"** (not Serverless)
+   
+   **c. Creation Method:**
+   - **Creation method:** Select **"Easy create"** (recommended for simplicity)
+   
+   **d. Configuration Preset:**
+   - **For testing/development:** Select **"Demo"** (uses `cache.t4g.micro`, ~$10-15/month)
+   - **For production:** Select **"Dev/Test"** (uses `cache.r7g.large`, ~$50-70/month) or **"Production"** (uses `cache.r7g.xlarge`, ~$100-150/month)
+   - **⚠️ IMPORTANT:** Start with **"Demo"** or **"Dev/Test"** for initial setup - you can scale up later if needed
+   - The **"Production"** preset uses `cache.r7g.xlarge` (26.32 GiB) which is expensive and likely overkill
+   
+   **e. Cache Settings (if using Easy create, you can modify these after creation):**
    - **Name:** `langgraph-redis`
    - **Description:** `Redis cache for LangGraph deep research agent`
+   - **Engine version:** Select the latest Redis version (or Valkey version if using Valkey)
 
-   **b. Location:**
-   - **Cloud provider:** AWS
+   **f. Location:**
    - **Region:** Select your region (e.g., `us-east-1`)
    - **Availability Zone:** Select any zone (e.g., `us-east-1a`)
 
-   **c. Node Type:**
-   - **Node type:** Select **"cache.t3.micro"** (smallest, ~$15/month)
-     - For production, consider `cache.t3.small` or larger
-   - **Number of replicas:** 0 (for cost savings, or 1 for high availability)
-
-   **d. Network Settings:**
+   **g. Network Settings:**
    - **VPC:** Select same VPC as your EC2 instance
    - **Subnet group:** Select `langgraph-redis-subnet` (created in step 2)
    - **Security groups:** Select `redis-sg` (created in step 3)
    - **Availability Zone:** Select any zone
+   
+   **h. Replicas (if not using Easy create):**
+   - **Number of replicas:** 0 (for cost savings, or 1 for high availability)
 
-   **e. Encryption and Backup (Optional):**
+   **i. Encryption and Backup (Optional):**
    - **Encryption:** Can leave default (encryption at rest is optional for testing)
    - **Backup:** Can disable for cost savings, or enable for production
 
-   **f. Maintenance:**
+   **j. Maintenance:**
    - **Maintenance window:** Leave default or customize
 
 6. **Review and Create:**
    - Review all settings
    - Click **"Create"** button
-   - Wait for cluster to be created (takes 5-10 minutes)
+   - Wait for cache to be created (takes 5-10 minutes)
    - Status will show "Creating" → "Available"
 
 7. **Get Redis Endpoint:**
-   - Once status is "Available", click on your cluster name
-   - In the details panel, find **"Primary endpoint"**
+   - Once status is "Available", click on your cache name in the list
+   - In the details panel, find **"Primary endpoint"** or **"Configuration endpoint"**
    - Copy the endpoint (format: `langgraph-redis.xxxxx.cache.amazonaws.com:6379`)
    - **⚠️ IMPORTANT:** You'll need this for the `REDIS_URI` GitHub secret
    - The format for `REDIS_URI` is: `redis://langgraph-redis.xxxxx.cache.amazonaws.com:6379`
+   - **Note:** The endpoint may not include the port number in the console - add `:6379` when creating the `REDIS_URI`
 
 **✅ ElastiCache Redis is now set up!**
 
@@ -719,12 +741,20 @@ These are fixed configuration values for your application. Copy them exactly as 
      - `~/.ssh/github_deploy_key.pub` (public key - safe to share)
 
 3. **Copy the public key to your EC2 instance:**
+   - You need the `.pem` file that was generated before
+   - You can test if you can login to the EC2 instance using the pem file by running the command below
    ```bash
-   ssh-copy-id -i ~/.ssh/github_deploy_key.pub ec2-user@YOUR_EC2_HOST
+   ssh -i ~/Downloads/deep-research-key.pem ec2-user@YOUR_EC2_HOST
+   ```
+   - If that works then you can copy the public key using the following command
+   ```bash
+   ssh-copy-id -i ~/.ssh/github_deploy_key.pub -o "IdentityFile=~/Downloads/deep-research-key.pem" ec2-user@YOUR_EC2_HOST
    ```
    - Replace `ec2-user` with your EC2 username (`ubuntu` for Ubuntu, `ec2-user` for Amazon Linux)
    - Replace `YOUR_EC2_HOST` with your EC2 public IP or DNS name
    - You'll be prompted for your EC2 password or existing SSH key
+   **⚠️ IMPORTANT:** 
+   - If you get a warning that key already exist but it's first time trying just add a `-f` to the command. so `ssh-copy-id -f -i ...`
 
 4. **Display the private key to copy to GitHub:**
    ```bash
