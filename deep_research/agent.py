@@ -2,16 +2,22 @@
 
 This module creates a deep research agent with custom tools and prompts
 for conducting web research with strategic thinking and context management.
+
+The agent supports runtime configuration through context schema, allowing
+dynamic model and tool selection without redeploying the graph.
 """
 
 import os
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from langchain.chat_models import init_chat_model
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 # PostgresSaver import removed - LangGraph server handles persistence via POSTGRES_URI
 from deepagents import create_deep_agent
+from langgraph.runtime import Runtime
 
 from research_agent.prompts import (
     RESEARCHER_INSTRUCTIONS,
@@ -19,6 +25,28 @@ from research_agent.prompts import (
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
 from research_agent.tools import tavily_search, think_tool
+
+# Configuration Schema for Runtime Context
+@dataclass
+class Context:
+    """Runtime context schema for agent configuration.
+    
+    This allows dynamic configuration of model and tools per-run without
+    creating new assistants. Values are passed via config.configurable
+    when creating runs.
+    """
+    model_name: str = "openai:gpt-4o"
+    selected_tools: list[str] = None  # None means use all available tools
+    
+    # Subagent configuration: Only selection is exposed to frontend
+    # Model and tools are handled by backend defaults (uses main agent model and tools)
+    selected_subagents: list[str] = None  # List of subagent names to include. None means use all available
+    
+    def __post_init__(self):
+        if self.selected_tools is None:
+            self.selected_tools = ["tavily_search", "think_tool"]
+        # Note: selected_subagents default is set in make_graph() to use all AVAILABLE_SUBAGENTS
+        # This allows the default to be dynamic based on what subagents are available
 
 # Limits
 max_concurrent_research_units = 3
@@ -39,12 +67,26 @@ INSTRUCTIONS = (
     )
 )
 
-# Create research sub-agent
-research_sub_agent = {
-    "name": "research-agent",
-    "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-    "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-    "tools": [tavily_search, think_tool],
+# Available tools mapping
+AVAILABLE_TOOLS = {
+    "tavily_search": tavily_search,
+    "think_tool": think_tool,
+}
+
+# Available subagents configuration
+# Each subagent can be enabled/disabled and configured separately
+AVAILABLE_SUBAGENTS = {
+    "research-agent": {
+        "name": "research-agent",
+        "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+        "system_prompt_template": RESEARCHER_INSTRUCTIONS,  # Will be formatted with date
+    },
+    # You can add more subagents here in the future
+    # "analysis-agent": {
+    #     "name": "analysis-agent",
+    #     "description": "Specialized agent for data analysis tasks.",
+    #     "system_prompt_template": "You are an expert data analyst...",
+    # },
 }
 
 # Model Gemini 3 
@@ -106,12 +148,197 @@ else:
     print("⚠️  No database configuration found.")
     print("   Set POSTGRES_URI_CUSTOM in your .env file")
 
-# Create the agent without a checkpointer
-# The LangGraph server will handle persistence automatically using POSTGRES_URI
+def get_model_from_name(model_name: str):
+    """Initialize a model from a model name string.
+    
+    Supports formats:
+    - "openai:gpt-4o" or "gpt-4o" -> ChatOpenAI
+    - "anthropic:claude-sonnet-4-5" or "claude-sonnet-4-5" -> ChatAnthropic
+    - "google:gemini-3-pro-preview" or "gemini-3-pro-preview" -> ChatGoogleGenerativeAI
+    
+    Args:
+        model_name: Model identifier string
+        
+    Returns:
+        Initialized chat model
+    """
+    # Remove provider prefix if present
+    if ":" in model_name:
+        provider, model_id = model_name.split(":", 1)
+    else:
+        provider = None
+        model_id = model_name
+    
+    # Normalize provider
+    if provider:
+        provider = provider.lower()
+    elif model_id.startswith("gpt"):
+        provider = "openai"
+    elif model_id.startswith("claude"):
+        provider = "anthropic"
+    elif model_id.startswith("gemini"):
+        provider = "google"
+    
+    # Initialize appropriate model
+    if provider == "openai":
+        return ChatOpenAI(model=model_id)
+    elif provider == "anthropic":
+        return init_chat_model(f"anthropic:{model_id}")
+    elif provider == "google":
+        return ChatGoogleGenerativeAI(model=model_id, temperature=0.0)
+    else:
+        # Fallback: try init_chat_model with full string
+        return init_chat_model(model_name)
+
+
+async def make_graph(config: dict = None):
+    """Create the research agent graph with runtime configuration.
+    
+    This function is called by LangGraph server to create the graph dynamically.
+    Configuration is read from config.configurable parameter.
+    
+    To use this, update langgraph.json to reference:
+    "research": "./agent.py:make_graph"
+    
+    Args:
+        config: RunnableConfig dict containing configurable values.
+                The configurable dict should contain model_name and selected_tools.
+                If None, uses default configuration.
+    
+    Returns:
+        Compiled graph ready for execution
+    """
+    # Get configuration from config dict
+    if config is not None and isinstance(config, dict):
+        configurable = config.get("configurable", {})
+        
+        # Extract main agent configuration
+        model_name = configurable.get("model_name", "openai:gpt-4o")
+        
+        # Check if selected_tools was explicitly provided (even if empty)
+        if "selected_tools" in configurable:
+            selected_tools_names = configurable.get("selected_tools", [])
+            tools_explicitly_provided = True
+        else:
+            # Not provided - use default (all tools)
+            selected_tools_names = ["tavily_search", "think_tool"]
+            tools_explicitly_provided = False
+        
+        # Extract subagent selection
+        if "selected_subagents" in configurable:
+            selected_subagents_names = configurable.get("selected_subagents", [])
+            # Empty array means explicitly no subagents
+            subagents_explicitly_provided = True
+        else:
+            # Not provided - use default (all available)
+            selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
+            subagents_explicitly_provided = False
+        
+        # Subagent configuration: Use backend defaults (main agent model and tools)
+        # Frontend only controls which subagents are selected, not their configuration
+        subagent_model_name = None  # Always use main agent model (backend default)
+        subagent_tools_names = selected_tools_names.copy()  # Always use main agent tools (backend default)
+        
+        # Only log if custom config is provided (not defaults)
+        if "model_name" in configurable or tools_explicitly_provided or "selected_subagents" in configurable:
+            subagent_info = f"subagents={selected_subagents_names}, subagent_model=main (default), subagent_tools=main (default)"
+            print(f"🔧 make_graph() - Using config: model={model_name}, tools={selected_tools_names}, {subagent_info}")
+    else:
+        # Default configuration when config is not available
+        model_name = "openai:gpt-4o"
+        selected_tools_names = ["tavily_search", "think_tool"]
+        tools_explicitly_provided = False
+        selected_subagents_names = list(AVAILABLE_SUBAGENTS.keys())
+        subagents_explicitly_provided = False
+        # Subagent defaults: use main model and main tools
+        subagent_model_name = None
+        subagent_tools_names = selected_tools_names.copy()
+    
+    # Initialize main agent model
+    model = get_model_from_name(model_name)
+    
+    # Select main agent tools based on configuration
+    selected_tools = []
+    for tool_name in selected_tools_names:
+        if tool_name in AVAILABLE_TOOLS:
+            selected_tools.append(AVAILABLE_TOOLS[tool_name])
+        else:
+            print(f"⚠️  Warning: Tool '{tool_name}' not found. Available: {list(AVAILABLE_TOOLS.keys())}")
+    
+    # If no valid tools selected:
+    # - If user explicitly provided empty list: use no tools (respect user choice)
+    # - If not provided (default): use all available tools
+    if not selected_tools:
+        if tools_explicitly_provided and selected_tools_names == []:
+            # User explicitly deselected all tools - respect their choice
+            print("ℹ️  No tools selected by user. Running without tools.")
+        else:
+            # Default case or invalid tools: use all available tools
+            print("ℹ️  Using all available tools (default).")
+            selected_tools = list(AVAILABLE_TOOLS.values())
+    
+    # Subagent configuration: Always use main agent model and tools (backend defaults)
+    # Frontend only controls which subagents are selected, not their configuration
+    subagent_model = model  # Always use main agent model
+    subagent_tools = selected_tools.copy()  # Always use main agent tools
+    print(f"🔧 Subagent using main agent model: {model_name}")
+    print(f"🔧 Subagent using main agent tools: {[t.name if hasattr(t, 'name') else str(t) for t in selected_tools]}")
+    
+    # Build list of subagents based on selection
+    active_subagents = []
+    for subagent_name in selected_subagents_names:
+        if subagent_name in AVAILABLE_SUBAGENTS:
+            subagent_config = AVAILABLE_SUBAGENTS[subagent_name]
+            # Create subagent with configured tools (no explicit model - uses main agent model by default)
+            # This matches the static agent behavior
+            subagent = {
+                "name": subagent_config["name"],
+                "description": subagent_config["description"],
+                "system_prompt": subagent_config["system_prompt_template"].format(date=current_date),
+                "tools": subagent_tools,
+                # Don't explicitly set model - let it use main agent model by default (matches static agent)
+            }
+            active_subagents.append(subagent)
+            print(f"✅ Included subagent: {subagent_name}")
+        else:
+            print(f"⚠️  Warning: Subagent '{subagent_name}' not found. Available: {list(AVAILABLE_SUBAGENTS.keys())}")
+    
+    # If no subagents selected and explicitly provided, warn but continue
+    if not active_subagents and subagents_explicitly_provided:
+        print("⚠️  Warning: No subagents selected. Agent will run without subagents.")
+    
+    # Create the agent without a checkpointer
+    # The LangGraph server will handle persistence automatically using POSTGRES_URI
+    agent = create_deep_agent(
+        model=model,
+        tools=selected_tools,
+        system_prompt=INSTRUCTIONS,
+        subagents=active_subagents if active_subagents else None,  # None = no subagents
+        context_schema=Context,
+        # Don't pass checkpointer - LangGraph server handles it via POSTGRES_URI
+    )
+    
+    return agent
+
+
+
+'''
+# Static agent for testing (original implementation)
+# This is used when langgraph.json points to "./agent.py:agent"
+# For dynamic configuration, use make_graph() instead
+_default_model = get_model_from_name("openai:gpt-4o")
+_default_tools = list(AVAILABLE_TOOLS.values())
+_default_research_sub_agent = {
+    "name": "research-agent",
+    "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+    "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
+    "tools": _default_tools,
+}
 agent = create_deep_agent(
-    model=ChatOpenAI(model="gpt-4o"),
-    tools=[tavily_search, think_tool],
+    model=_default_model,
+    tools=_default_tools,
     system_prompt=INSTRUCTIONS,
-    subagents=[research_sub_agent],
-    # Don't pass checkpointer - LangGraph server handles it via POSTGRES_URI
+    subagents=[_default_research_sub_agent],
+    context_schema=Context,
 )
+'''

@@ -1,9 +1,3 @@
-# Docker Compose file for AWS deployment
-# This mimics the AWS ECS setup with separate services
-# Uses POSTGRES_URI for consistency with docker-compose.yml
-
-# version: '3.8'  # Version is obsolete in newer docker-compose
-
 services:
   redis:
     image: redis:7-alpine
@@ -12,45 +6,28 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   langgraph-api:
-    # Image will be set by CI/CD workflow
-    # For local testing, uncomment build section:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    image: deep-research-api:latest
+    image: ${APP_IMAGE}
     ports:
       - "8123:8000"
     stdin_open: true
     tty: true
     environment:
-      # Database - required
       - POSTGRES_URI=${POSTGRES_URI}
-      # Redis - required
       - REDIS_URI=redis://redis:6379
-      # API Keys - required
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
-      # Optional API Keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # Optional: Enterprise license (alternative to LANGSMITH_API_KEY)
       - LANGGRAPH_CLOUD_LICENSE_KEY=${LANGGRAPH_CLOUD_LICENSE_KEY:-}
-      # Authentication - required if using auth.py
-      # Uses absolute path in container (/api/security/auth.py:auth)
-      # Can be overridden in .env file with LANGGRAPH_AUTH
       - LANGGRAPH_AUTH=${LANGGRAPH_AUTH}
-      # HTTP App - required if using custom webapp
-      # Uses absolute path in container (/api/webapp_advanced.py:app)
-      # Can be overridden in .env file with LANGGRAPH_HTTP
       - LANGGRAPH_HTTP=${LANGGRAPH_HTTP}
-      # Optional: Authentication credentials (if using auth.py)
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
     depends_on:
@@ -60,15 +37,12 @@ services:
       - .env
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/docs', timeout=5)"]
-      # Note: Health check uses container port 8000, not host port 8123
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
     restart: unless-stopped
-    # Keep container running - don't exit on command completion
     command: []
 
 volumes:
   redis-data:
-
