@@ -48,6 +48,25 @@ jobs:
 
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
+      - name: Generate LangGraph config from langgraph.json
+        id: langgraph-config
+        run: |
+          cd deep_research
+          # Generate LANGGRAPH_AUTH and LANGGRAPH_HTTP from langgraph.json
+          # The script outputs export statements, so we eval them to set the variables
+          eval $(python3 deployment/generate_langgraph_env.py)
+          # Set GitHub Actions outputs (multiline values need special handling)
+          {
+            echo "LANGGRAPH_AUTH<<EOF"
+            echo "${LANGGRAPH_AUTH}"
+            echo "EOF"
+            echo "LANGGRAPH_HTTP<<EOF"
+            echo "${LANGGRAPH_HTTP}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          echo "✅ Generated LANGGRAPH_AUTH: ${LANGGRAPH_AUTH}"
+          echo "✅ Generated LANGGRAPH_HTTP: ${LANGGRAPH_HTTP}"
+
       - name: Create environment file for deployment
         run: |
           cat > .env.deploy << EOF
@@ -59,8 +78,8 @@ jobs:
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
           ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
           LANGGRAPH_CLOUD_LICENSE_KEY=${{ secrets.LANGGRAPH_CLOUD_LICENSE_KEY }}
-          LANGGRAPH_AUTH=${{ secrets.LANGGRAPH_AUTH }}
-          LANGGRAPH_HTTP=${{ secrets.LANGGRAPH_HTTP }}
+          LANGGRAPH_AUTH=${{ steps.langgraph-config.outputs.LANGGRAPH_AUTH }}
+          LANGGRAPH_HTTP=${{ steps.langgraph-config.outputs.LANGGRAPH_HTTP }}
           SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}
           EOF

@@ -686,15 +686,28 @@ postgresql://postgres.ltbwpsjgivrwxoevnolj:your_password@aws-1-us-east-2.pooler.
 ### Application Configuration
 
 **📍 WHERE TO GET THESE:**
-These are fixed configuration values for your application. Copy them exactly as shown:
+These values are **automatically generated** from `langgraph.json` during deployment. You **do NOT need to add them as GitHub secrets**.
 
-- **Secret Name:** `LANGGRAPH_AUTH`
-  - **Value:** `{"path": "/api/security/auth.py:auth"}`
-  - **⚠️ IMPORTANT:** Copy exactly, including the curly braces and quotes
+**How it works:**
+- The workflow reads `deep_research/langgraph.json`
+- Converts relative paths (e.g., `./webapp_advanced.py:app`) to Docker paths (e.g., `/api/webapp_advanced.py:app`)
+- Automatically sets `LANGGRAPH_AUTH` and `LANGGRAPH_HTTP` environment variables
 
-- **Secret Name:** `LANGGRAPH_HTTP`
-  - **Value:** `{"app": "/api/webapp_advanced.py:app"}`
-  - **⚠️ IMPORTANT:** Copy exactly, including the curly braces and quotes
+**To change these values:**
+1. Edit `deep_research/langgraph.json`:
+   ```json
+   {
+     "http": {
+       "app": "./webapp_advanced.py:app"
+     },
+     "auth": {
+       "path": "./security/auth.py:auth"
+     }
+   }
+   ```
+2. Commit and push - the deployment will automatically use the new values
+
+**⚠️ Note:** If you need to override these values, you can still add them as GitHub secrets, but it's not recommended. The `langgraph.json` file is the source of truth.
 
 ### Supabase Authentication (Required if using auth.py)
 

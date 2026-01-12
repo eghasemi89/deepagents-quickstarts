@@ -53,7 +53,7 @@ async def get_current_user(
     logger.debug(f"Authorization header present: {authorization is not None}")
     
     if not authorization:
-               raise Auth.exceptions.HTTPException(
+        raise Auth.exceptions.HTTPException(
             status_code=401, detail="Authorization header is required"
         )
     
