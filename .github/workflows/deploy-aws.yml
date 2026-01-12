@@ -121,7 +121,7 @@ jobs:
           set -e
 
           mkdir -p ~/.ssh
-          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
