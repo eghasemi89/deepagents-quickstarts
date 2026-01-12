@@ -15,7 +15,7 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,23 +37,22 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Change to directory containing Dockerfile
+          set -e
           cd deep_research
-          
-          # Build Docker image
+
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          
-          # Push both tags
+
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          
+
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Create environment file for deployment
         run: |
           cat > .env.deploy << EOF
           POSTGRES_URI=${{ secrets.POSTGRES_URI }}
+          DATABASE_URI=${{ secrets.POSTGRES_URI }}
           REDIS_URI=${{ secrets.REDIS_URI }}
           LANGSMITH_API_KEY=${{ secrets.LANGSMITH_API_KEY }}
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
@@ -76,39 +75,40 @@ jobs:
           ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
           AWS_REGION: ${{ env.AWS_REGION }}
         run: |
+          set -e
+
           # Setup SSH
           mkdir -p ~/.ssh
-          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
-          
-          # Copy files to EC2
-          # Use deep_research/deployment/docker-compose.aws-production.yml if using ElastiCache, otherwise use deep_research/deployment/docker-compose.aws.yml
-          scp -i ~/.ssh/deploy_key deep_research/deployment/docker-compose.aws.yml $EC2_USER@$EC2_HOST:/home/$EC2_USER/
-          # OR for production with ElastiCache:
-          # scp -i ~/.ssh/deploy_key deep_research/deployment/docker-compose.aws-production.yml $EC2_USER@$EC2_HOST:/home/$EC2_USER/docker-compose.aws.yml
-          scp -i ~/.ssh/deploy_key .env.deploy $EC2_USER@$EC2_HOST:/home/$EC2_USER/.env
-          
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          # Copy files to EC2 (explicit destination filename)
+          scp -i ~/.ssh/deploy_key deep_research/deployment/docker-compose.aws.yml \
+            "$EC2_USER@$EC2_HOST:/home/$EC2_USER/docker-compose.aws.yml"
+
+          scp -i ~/.ssh/deploy_key .env.deploy \
+            "$EC2_USER@$EC2_HOST:/home/$EC2_USER/.env"
+
           # Login to ECR on EC2 and deploy
-          ssh -i ~/.ssh/deploy_key $EC2_USER@$EC2_HOST << EOF
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" << EOF
             set -e
-            # Login to ECR
-            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-            
-            # Update docker-compose.aws.yml with new image
-            sed -i "s|image:.*|image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}|g" docker-compose.aws.yml
-            
-            # Stop existing containers
-            docker-compose -f docker-compose.aws.yml down || true
-            
-            # Pull new image
-            docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
-            docker tag ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-            
-            # Start containers
-            docker-compose -f docker-compose.aws.yml up -d
-            
-            # Clean up old images
+
+            aws ecr get-login-password --region ${AWS_REGION} | \
+              docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+            export APP_IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+            echo "=== Compose images (rendered) ==="
+            docker-compose -f docker-compose.aws.yml --env-file .env config | \
+              awk '/services:/{flag=1} flag{print} /volumes:/{exit}' | \
+              grep -E 'redis:|langgraph-api:|image:' || true
+            echo "================================"
+
+            docker-compose -f docker-compose.aws.yml --env-file .env down || true
+            docker pull \$APP_IMAGE
+            docker-compose -f docker-compose.aws.yml --env-file .env up -d
+
             docker image prune -f
           EOF
 
@@ -118,17 +118,18 @@ jobs:
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
-          
-          # Wait for service to be ready
-          sleep 30
-          
-          # Check if containers are running
-          ssh -i ~/.ssh/deploy_key $EC2_USER@$EC2_HOST "docker-compose -f docker-compose.aws.yml ps"
-          
-          # Health check
-          ssh -i ~/.ssh/deploy_key $EC2_USER@$EC2_HOST "docker-compose -f docker-compose.aws.yml exec -T langgraph-api python -c 'import httpx; httpx.get(\"http://localhost:8000/docs\", timeout=5)'" || echo "Health check failed, but deployment completed"
+          set -e
 
+          mkdir -p ~/.ssh
+          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          sleep 30
+
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" \
+            "docker-compose -f docker-compose.aws.yml --env-file .env ps"
+
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" \
+            "docker-compose -f docker-compose.aws.yml --env-file .env exec -T langgraph-api python -c 'import httpx; httpx.get(\"http://localhost:8000/docs\", timeout=5)'" \
+            || echo "Health check failed, but deployment completed"
